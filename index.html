@@ -41,6 +41,16 @@ button:disabled{opacity:.6;cursor:wait}
 .pv{margin:2px 0;padding:6px 10px;border-left:3px solid var(--acc);color:var(--mute)}
 .pv:empty{display:none}
 .katex-display{overflow-x:auto;overflow-y:hidden}
+.sticky{position:sticky;bottom:0;display:flex;gap:12px;align-items:center;flex-wrap:wrap;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin-top:12px;box-shadow:0 -2px 10px rgba(0,0,0,.08)}
+.sticky button{margin-left:auto}
+#tm{font-variant-numeric:tabular-nums;font-weight:700}
+.card.miss{border-color:var(--bad)}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:12px}
+.stats div{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 14px}
+.stats b{display:block;font-size:24px}
+.meter{height:8px;border-radius:4px;background:var(--bg);border:1px solid var(--line);overflow:hidden}
+.meter i{display:block;height:100%;background:var(--acc)}
+tr.late td:nth-child(4){color:var(--bad)}
 </style>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.css">
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.js"></script>
@@ -56,6 +66,15 @@ button:disabled{opacity:.6;cursor:wait}
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let me = null, D = null, T = null, cur = null, tab = 'students', S = [], busy = 0;
+let draft = null, tick = null, R = null, fS = '', fT = '';
+const DEF = { time: 0, attempts: 0, shuffleQ: false, shuffleO: false, showAnswers: true };
+const dur = s => s === '' || s == null ? '—' : Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+const pj = (s, d) => { if (typeof s !== 'string') return s ?? d; try { return JSON.parse(s); } catch (e) { return d; } };
+function shuffle(a) {
+  a = a.slice();
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
+  return a;
+}
 
 // Формули LaTeX: $...$ у рядку, $$...$$ окремим рядком
 function math(el) {
@@ -84,7 +103,7 @@ async function api(action, p = {}) {
     alert('Не вдалося зв\'язатися з сервером. Перевірте інтернет і налаштування доступу.');
     throw e;
   } finally { busy--; bar(); }
-  if (j.error) { alert(j.error); throw new Error(j.error); }
+  if (j.error) { alert(j.error); throw Object.assign(new Error(j.error), { server: true }); }
   return j;
 }
 
@@ -108,55 +127,148 @@ async function login(saved) {
     if (j.role === 'teacher') { D = j.data; T = null; renderT(); } else { S = j.data.tests; home(); }
   } catch (e) { me = null; try { localStorage.removeItem('code'); } catch (x) {} loginView(); }
 }
-function logout() { me = null; try { localStorage.removeItem('code'); } catch (e) {} loginView(); }
+function logout() { stopTimer(); draft = null; me = null; try { localStorage.removeItem('code'); } catch (e) {} loginView(); }
 
 /* ---------- Учень ---------- */
+// чернетка спроби (порядок, відповіді, час початку) зберігається в браузері — переживає перезавантаження
+const dKey = id => 'draft:' + me.code + ':' + id;
+function loadDraft(id) { try { return JSON.parse(localStorage.getItem(dKey(id))); } catch (e) { return null; } }
+function saveDraft(id, d) { try { localStorage.setItem(dKey(id), JSON.stringify(d)); } catch (e) {} }
+function dropDraft(id) { try { localStorage.removeItem(dKey(id)); } catch (e) {} }
+function stopTimer() { clearInterval(tick); tick = null; }
+
 function home() {
-  const j = { tests: S };
-  $('#app').innerHTML = '<h2>Мої тести</h2>' + (j.tests.length ? j.tests.map(t => `
-    <div class="card"><div><b>${esc(t.title)}</b><br><small>${t.last ? 'Останній результат: ' + t.last.score + ' з ' + t.last.max : 'Ще не пройдено'}</small></div>
-    <button onclick="start('${t.id}')">${t.last ? 'Пройти ще раз' : 'Почати'}</button></div>`).join('')
-    : '<p class="mute">Поки що немає призначених тестів.</p>');
+  stopTimer(); draft = null;
+  $('#app').innerHTML = '<h2>Мої тести</h2>' + (S.length ? S.map(t => {
+    const s = t.settings || DEF, left = s.attempts ? s.attempts - t.attempts : Infinity, d = loadDraft(t.id);
+    const info = [`Питань: ${t.questions.length}`, s.time ? `⏱ ${s.time} хв` : '', s.attempts ? `Спроб: ${t.attempts} з ${s.attempts}` : '',
+      t.last ? `Останній результат: ${t.last.score} з ${t.last.max}` : 'Ще не пройдено'].filter(Boolean).join(' · ');
+    const btn = d ? `<button onclick="start('${t.id}')">Продовжити</button>`
+      : left <= 0 ? '<button disabled style="cursor:default">Спроби вичерпано</button>'
+      : `<button onclick="start('${t.id}')">${t.last ? 'Пройти ще раз' : 'Почати'}</button>`;
+    return `<div class="card"><div><b>${esc(t.title)}</b><br><small>${info}</small></div>${btn}</div>`;
+  }).join('') : '<p class="mute">Поки що немає призначених тестів.</p>');
 }
 
-function qInput(q, i) {
-  if (q.type === 'choice') return q.options.map((o, j) => `<label class="q"><input type="radio" name="q${i}" value="${j}"> ${esc(o)}</label>`).join('');
-  if (q.type === 'multi') return '<small>Оберіть усі правильні варіанти</small>' + q.options.map((o, j) => `<label class="q"><input type="checkbox" name="q${i}" value="${j}"> ${esc(o)}</label>`).join('');
+function qInput(q, i, ord) {
+  ord = ord || (q.options || []).map((_, j) => j);
+  if (q.type === 'choice') return ord.map(j => `<label class="q"><input type="radio" name="q${i}" value="${j}"> ${esc(q.options[j])}</label>`).join('');
+  if (q.type === 'multi') return '<small>Оберіть усі правильні варіанти</small>' + ord.map(j => `<label class="q"><input type="checkbox" name="q${i}" value="${j}"> ${esc(q.options[j])}</label>`).join('');
   if (q.type === 'number') return `<input id="a${i}" inputmode="decimal" autocomplete="off" placeholder="Число або дріб, напр. 3/4">`;
   if (q.type === 'match') return q.lefts.map((l, j) => `<div class="row"><span style="flex:1">${esc(l)}</span>
     <select id="m${i}_${j}" style="flex:1;width:auto"><option value="">—</option>${q.rights.map(r => `<option value="${esc(r)}">${esc(r).replace(/\$/g, '')}</option>`).join('')}</select></div>`).join('');
   return `<input id="a${i}" autocomplete="off" placeholder="Ваша відповідь">`;
 }
-function start(id) {
-  cur = S.find(t => t.id == id);
-  $('#app').innerHTML = `<h2>${esc(cur.title)}</h2>` + cur.questions.map((q, i) =>
-    `<div class="card col"><b>${i + 1}. ${esc(q.text)}</b>${qInput(q, i)}</div>`).join('') +
-    '<button id="sbtn" onclick="submitTest()">Надіслати відповіді</button>';
-}
-
-async function submitTest() {
-  const answers = cur.questions.map((q, i) => {
+function collect() {
+  return cur.questions.map((q, i) => {
     if (q.type === 'choice') { const c = document.querySelector(`input[name=q${i}]:checked`); return c ? +c.value : -1; }
     if (q.type === 'multi') return [...document.querySelectorAll(`input[name=q${i}]:checked`)].map(c => +c.value);
     if (q.type === 'match') return q.lefts.map((_, j) => $(`#m${i}_${j}`).value);
     return $('#a' + i).value;
   });
-  const b = $('#sbtn'); b.disabled = true; b.textContent = 'Перевіряємо…';
+}
+function fill(a) {
+  cur.questions.forEach((q, i) => {
+    const v = a[i];
+    if (q.type === 'choice' || q.type === 'multi') [].concat(v).forEach(j => { const c = document.querySelector(`input[name=q${i}][value="${j}"]`); if (c) c.checked = true; });
+    else if (q.type === 'match') (v || []).forEach((x, j) => { const el = $(`#m${i}_${j}`); if (el) el.value = x; });
+    else if ($('#a' + i)) $('#a' + i).value = v ?? '';
+  });
+}
+function answered(q, a) {
+  if (q.type === 'choice') return a >= 0;
+  if (q.type === 'multi') return a.length > 0;
+  if (q.type === 'match') return a.some(Boolean);
+  return String(a ?? '').trim() !== '';
+}
+// відповідь у вигляді тексту (для розбору й для викладача)
+function fmtAns(q, a) {
+  if (q.type === 'choice') return a >= 0 && q.options[a] != null ? q.options[a] : '—';
+  if (q.type === 'multi') return (a || []).map(j => q.options[j]).join('; ') || '—';
+  if (q.type === 'match') return (q.lefts || q.pairs.map(p => p.left)).map((l, j) => l + ' → ' + ((a || [])[j] || '—')).join('; ');
+  return String(a ?? '').trim() || '—';
+}
+
+async function start(id) {
+  cur = S.find(t => t.id == id);
+  let d = loadDraft(id);
+  if (!d) {
+    try { await api('start', { testId: id }); } catch (e) { return; }
+    const set = cur.settings || DEF, idx = cur.questions.map((_, i) => i);
+    d = {
+      started: Date.now(), answers: null,
+      order: set.shuffleQ ? shuffle(idx) : idx,
+      opts: cur.questions.map(q => q.options ? (set.shuffleO ? shuffle(q.options.map((_, j) => j)) : null) : null)
+    };
+    saveDraft(id, d);
+  }
+  draft = d;
+  $('#app').innerHTML = `<h2>${esc(cur.title)}</h2>` + d.order.map((i, n) =>
+    `<div class="card col" id="c${i}"><b>${n + 1}. ${esc(cur.questions[i].text)}</b>${qInput(cur.questions[i], i, d.opts[i])}</div>`).join('') +
+    '<div class="sticky"><span id="cnt"></span><span id="tm"></span><button id="sbtn" onclick="submitTest()">Надіслати відповіді</button></div>';
+  if (d.answers) fill(d.answers);
+  progress();
+  if ((cur.settings || DEF).time) { tick = setInterval(timerTick, 1000); timerTick(); }
+}
+// будь-яка зміна відповіді → зберегти чернетку й оновити лічильник
+$('#app').addEventListener('input', onAns);
+$('#app').addEventListener('change', onAns);
+function onAns(e) {
+  if (!draft || !$('#cnt')) return;
+  draft.answers = collect(); saveDraft(cur.id, draft); progress();
+  const c = e.target.closest('.card'); if (c) c.classList.remove('miss');
+}
+function progress() {
+  const a = draft.answers || collect();
+  $('#cnt').textContent = `Відповіли ${cur.questions.filter((q, i) => answered(q, a[i])).length} з ${cur.questions.length}`;
+}
+function timerTick() {
+  const left = Math.ceil(cur.settings.time * 60 - (Date.now() - draft.started) / 1000);
+  const el = $('#tm');
+  if (!el) return stopTimer();
+  el.textContent = '⏱ ' + dur(Math.max(left, 0));
+  el.className = left < 60 ? 'bad' : '';
+  if (left <= 0) { stopTimer(); submitTest(true); }
+}
+
+async function submitTest(auto) {
+  if (submitTest.busy) return;
+  const answers = collect(), d = draft;
+  const miss = cur.questions.map((q, i) => i).filter(i => !answered(cur.questions[i], answers[i]));
+  if (auto !== true && miss.length && !confirm(`Без відповіді: ${miss.length} пит. Все одно надіслати?`)) {
+    miss.forEach(i => $('#c' + i).classList.add('miss'));
+    $('#c' + d.order.find(i => miss.includes(i))).scrollIntoView({ behavior: 'smooth', block: 'center' });
+    return;
+  }
+  stopTimer();
+  const b = $('#sbtn'); b.disabled = true; b.textContent = auto === true ? 'Час вийшов, надсилаємо…' : 'Перевіряємо…';
+  submitTest.busy = true;
   let j;
   try { j = await api('submit', { testId: cur.id, answers }); }
-  catch (e) { b.disabled = false; b.textContent = 'Надіслати відповіді'; return; }
-  const s = S.find(t => t.id == cur.id); if (s) s.last = { score: j.score, max: j.max };
+  catch (e) {
+    // помилка сервера (напр. вичерпано спроби) — чернетка вже не знадобиться
+    if (e.server) { dropDraft(cur.id); return home(); }
+    b.disabled = false; b.textContent = 'Надіслати відповіді'; return;
+  } finally { submitTest.busy = false; }
+  dropDraft(cur.id); draft = null;
+  const s = S.find(t => t.id == cur.id); if (s) { s.last = { score: j.score, max: j.max }; s.attempts = (s.attempts || 0) + 1; }
   $('#app').innerHTML = `<h2>${esc(cur.title)}</h2><div class="score">${j.score} з ${j.max}</div>` +
-    cur.questions.map((q, i) => `<div class="card col"><b>${i + 1}. ${esc(q.text)}</b>
-      ${j.review[i].ok ? '<span class="ok">Правильно</span>' : `<span class="bad">Неправильно.</span> <span>Правильна відповідь: ${esc(j.review[i].correct)}</span>`}</div>`).join('') +
+    (j.duration !== '' && j.duration != null ? `<p class="mute">Час: ${dur(j.duration)}</p>` : '') +
+    d.order.map((i, n) => { const q = cur.questions[i], rv = j.review[i]; return `<div class="card col"><b>${n + 1}. ${esc(q.text)}</b>
+      ${rv.ok ? '<span class="ok">Правильно</span>' : '<span class="bad">Неправильно</span>'}
+      <span>Ваша відповідь: ${esc(fmtAns(q, answers[i]))}</span>
+      ${!rv.ok && rv.correct != null ? `<span class="mute">Правильна відповідь: ${esc(rv.correct)}</span>` : ''}</div>`; }).join('') +
     '<button onclick="home()">До моїх тестів</button>';
 }
 
 /* ---------- Викладач ---------- */
-async function teacher() { D = await api('all'); T = null; renderT(); }
+async function teacher() { D = await api('all'); T = null; R = null; renderT(); }
+const nm = id => (D.students.find(s => s.id == id) || {}).name || '—';
+const tt = id => (D.tests.find(t => t.id == id) || {}).title || '—';
 
 function renderT() {
   if (T) return editor();
+  if (R != null) return $('#app').innerHTML = resultView();
   $('#app').innerHTML = `<div class="tabs">${[['students', 'Учні'], ['tests', 'Тести'], ['results', 'Результати']]
     .map(([k, n]) => `<button class="${tab === k ? 'on' : ''}" onclick="tab='${k}';renderT()">${n}</button>`).join('')}</div>` +
     ({ students: tStudents, tests: tTests, results: tResults })[tab]();
@@ -182,11 +294,16 @@ async function asg(studentId, testId, on) {
 
 function tTests() {
   return `<button onclick="newTest()" style="margin-bottom:12px">Створити тест</button>` +
-    (D.tests.map(t => `<div class="card"><div><b>${esc(t.title)}</b><br><small>Питань: ${t.questions.length}</small></div>
+    (D.tests.map(t => `<div class="card"><div><b>${esc(t.title)}</b><br><small>${setInfo(t)}</small></div>
       <div class="row"><button class="sec" onclick="editTest('${t.id}')">Редагувати</button><button class="sec" onclick="delTest('${t.id}')">Видалити</button></div></div>`).join('') || '<p class="mute">Тестів ще немає.</p>');
 }
-function newTest() { T = { title: '', questions: [] }; addQ(); }
-function editTest(id) { T = JSON.parse(JSON.stringify(D.tests.find(t => t.id == id))); renderT(); }
+function setInfo(t) {
+  const s = t.settings || DEF;
+  return [`Питань: ${t.questions.length}`, s.time ? `⏱ ${s.time} хв` : '', s.attempts ? `спроб: ${s.attempts}` : '',
+    s.shuffleQ || s.shuffleO ? 'перемішування' : '', s.showAnswers ? '' : 'відповіді приховано'].filter(Boolean).join(' · ');
+}
+function newTest() { T = { title: '', questions: [], settings: { ...DEF } }; addQ(); }
+function editTest(id) { T = JSON.parse(JSON.stringify(D.tests.find(t => t.id == id))); T.settings = { ...DEF, ...T.settings }; renderT(); }
 async function delTest(id) { if (!confirm('Видалити тест?')) return;
   D.tests = D.tests.filter(t => t.id != id); D.assign = D.assign.filter(a => a.testId != id);
   renderT(); api('delTest', { id }).catch(teacher);
@@ -238,6 +355,12 @@ function qFields(q, i) {
 function editor() {
   $('#app').innerHTML = `<h2>${T.id ? 'Редагування тесту' : 'Новий тест'}</h2>
     <input placeholder="Назва тесту" value="${esc(T.title)}" oninput="T.title=this.value" style="margin-bottom:8px">
+    <div class="card col"><b>Налаштування</b>
+      <div class="row"><label style="flex:1">Обмеження часу, хв<input type="number" min="0" value="${T.settings.time || ''}" placeholder="без обмежень" oninput="T.settings.time=Math.max(0,+this.value||0)"></label>
+        <label style="flex:1">Кількість спроб<input type="number" min="0" value="${T.settings.attempts || ''}" placeholder="без обмежень" oninput="T.settings.attempts=Math.max(0,Math.floor(+this.value)||0)"></label></div>
+      ${[['shuffleQ', 'Перемішувати питання'], ['shuffleO', 'Перемішувати варіанти відповідей'], ['showAnswers', 'Показувати учням правильні відповіді після здачі']]
+        .map(([k, n]) => `<label><input type="checkbox" ${T.settings[k] ? 'checked' : ''} onchange="T.settings.${k}=this.checked"> ${n}</label>`).join('')}
+      <small>Коли час вийде, відповіді надішлються автоматично.</small></div>
     <p class="mute" style="margin:0 0 12px">Формули: <code>$x^2+1$</code> у тексті, <code>$$\\frac{a}{b}$$</code> окремим рядком. Працює в питаннях і варіантах відповіді.</p>` +
     T.questions.map((q, i) => `<div class="card col">
       <div class="row"><select style="width:auto" onchange="setType(${i},this.value)">${TYPES.map(([k, n]) => `<option value="${k}" ${q.type == k ? 'selected' : ''}>${n}</option>`).join('')}</select>
@@ -259,13 +382,67 @@ async function saveTest() {
   } finally { saveTest.busy = false; }
 }
 
+const pct = r => r.max ? Math.round(r.score / r.max * 100) : 0;
+// результати з урахуванням фільтрів, найновіші зверху; i — індекс у D.results
+function filtered() {
+  return D.results.map((r, i) => ({ ...r, i })).filter(r => (!fS || r.studentId == fS) && (!fT || r.testId == fT)).reverse();
+}
+// тривалість понад ліміт (+1 хв на зв'язок)
+function late(r) { const t = D.tests.find(x => x.id == r.testId), s = t && t.settings; return !!(s && s.time && r.duration > s.time * 60 + 60); }
+
 function tResults() {
-  const nm = id => (D.students.find(s => s.id == id) || {}).name || '—';
-  const tt = id => (D.tests.find(t => t.id == id) || {}).title || '—';
-  const rs = D.results.slice().reverse();
-  return rs.length ? `<div style="overflow-x:auto"><table><tr><th>Учень</th><th>Тест</th><th>Бал</th><th>Дата</th></tr>` +
-    rs.map(r => `<tr><td>${esc(nm(r.studentId))}</td><td>${esc(tt(r.testId))}</td><td>${r.score} з ${r.max}</td><td>${new Date(r.date).toLocaleString('uk')}</td></tr>`).join('') + '</table></div>'
-    : '<p class="mute">Результатів ще немає.</p>';
+  const sel = (v, all, list, set) => `<select style="flex:1;width:auto;min-width:140px" onchange="${set}=this.value;renderT()"><option value="">${all}</option>` +
+    list.map(([id, n]) => `<option value="${esc(id)}" ${v == id ? 'selected' : ''}>${esc(n)}</option>`).join('') + '</select>';
+  const rs = filtered();
+  let h = `<div class="row" style="margin-bottom:12px">${sel(fS, 'Усі учні', D.students.map(s => [s.id, s.name]), 'fS')}${sel(fT, 'Усі тести', D.tests.map(t => [t.id, t.title]), 'fT')}
+    <button class="sec" onclick="teacher()">Оновити</button>${rs.length ? '<button class="sec" onclick="csv()">Експорт CSV</button>' : ''}</div>`;
+  if (!rs.length) return h + '<p class="mute">Результатів ще немає.</p>';
+  h += `<div class="stats"><div><b>${rs.length}</b><small>спроб</small></div>
+    <div><b>${Math.round(rs.reduce((a, r) => a + pct(r), 0) / rs.length)}%</b><small>середній результат</small></div>
+    <div><b>${new Set(rs.map(r => r.studentId)).size}</b><small>учнів</small></div></div>`;
+  if (fT) h += qStats(rs);
+  return h + `<div style="overflow-x:auto"><table><tr><th>Учень</th><th>Тест</th><th>Бал</th><th>Час</th><th>Дата</th><th></th></tr>` +
+    rs.map(r => `<tr class="${late(r) ? 'late' : ''}"><td>${esc(nm(r.studentId))}</td><td>${esc(tt(r.testId))}</td><td>${r.score} з ${r.max} <small>(${pct(r)}%)</small></td>
+      <td title="${late(r) ? 'Перевищено ліміт часу' : ''}">${dur(r.duration)}</td><td>${new Date(r.date).toLocaleString('uk')}</td>
+      <td><button class="sec" onclick="R=${r.i};renderT()">Відповіді</button></td></tr>`).join('') + '</table></div>';
+}
+// частка правильних відповідей на кожне питання вибраного тесту
+function qStats(rs) {
+  const t = D.tests.find(x => x.id == fT);
+  const oks = rs.map(r => pj(r.oks, null)).filter(o => Array.isArray(o) && t && o.length == t.questions.length);
+  if (!oks.length) return '';
+  return '<div class="card col"><b>Складність питань (% правильних відповідей)</b>' + t.questions.map((q, i) => {
+    const p = Math.round(oks.reduce((a, o) => a + (+o[i] || 0), 0) / oks.length * 100);
+    return `<div><small>${i + 1}. ${esc(q.text)}</small><div class="row"><div class="meter" style="flex:1"><i style="width:${p}%"></i></div><small style="min-width:3em">${p}%</small></div></div>`;
+  }).join('') + `<small>За ${oks.length} спроб(ою), що збігаються з поточною версією тесту.</small></div>`;
+}
+function fmtCorrect(q) {
+  if (q.type === 'choice') return q.options[q.correct] ?? '—';
+  if (q.type === 'multi') return (q.correct || []).map(i => q.options[i]).join('; ');
+  if (q.type === 'number') return q.value + (+String(q.tol).replace(',', '.') ? ' (±' + q.tol + ')' : '');
+  if (q.type === 'match') return q.pairs.map(p => p.left + ' → ' + p.right).join('; ');
+  return (q.accept || []).join(' / ');
+}
+function resultView() {
+  const r = D.results[R], t = D.tests.find(x => x.id == r.testId), a = pj(r.answers, []), oks = pj(r.oks, null);
+  let h = `<button class="sec" onclick="R=null;renderT()">← До результатів</button>
+    <h2>${esc(nm(r.studentId))} — ${esc(tt(r.testId))}</h2><div class="score">${r.score} з ${r.max}</div>
+    <p class="mute">${new Date(r.date).toLocaleString('uk')} · Час: ${dur(r.duration)}${late(r) ? ' <span class="bad">(перевищено ліміт)</span>' : ''}</p>`;
+  if (!t) return h + '<p class="mute">Тест видалено.</p>';
+  if (t.questions.length != r.max) h += '<p class="bad">Тест змінювали після цієї спроби — відповіді можуть не збігатися з питаннями.</p>';
+  return h + t.questions.map((q, i) => `<div class="card col"><b>${i + 1}. ${esc(q.text)}</b>
+    ${Array.isArray(oks) ? (oks[i] ? '<span class="ok">Правильно</span>' : '<span class="bad">Неправильно</span>') : ''}
+    <span>Відповідь учня: ${esc(fmtAns(q, a[i]))}</span><span class="mute">Правильна відповідь: ${esc(fmtCorrect(q))}</span></div>`).join('');
+}
+function csv() {
+  const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  const lines = [['Учень', 'Тест', 'Бал', 'Максимум', '%', 'Тривалість', 'Дата']].concat(filtered().map(r =>
+    [nm(r.studentId), tt(r.testId), r.score, r.max, pct(r), dur(r.duration), new Date(r.date).toLocaleString('uk')]));
+  // BOM і «;» — щоб Excel з українською локаллю відкрив файл коректно
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿' + lines.map(l => l.map(q).join(';')).join('\r\n')], { type: 'text/csv;charset=utf-8' }));
+  a.download = 'результати.csv'; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
 /* ---------- Старт ---------- */
