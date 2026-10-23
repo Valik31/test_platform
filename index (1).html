@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Платформа для тестів</title>
+<style>
+:root{--bg:#f2f5f8;--card:#fff;--ink:#1b2733;--mute:#64727f;--line:#d6dee6;--acc:#1f6f8b;--ok:#2e7d4f;--bad:#b3402f;color-scheme:light}
+@media(prefers-color-scheme:dark){:root{--bg:#141b22;--card:#1c262f;--ink:#e6edf3;--mute:#93a1ad;--line:#2f3d49;--acc:#4fb0cf;--ok:#5cc38a;--bad:#ef7f6d;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;padding:14px 20px;border-bottom:1px solid var(--line);background:var(--card)}
+header b{font-size:18px}
+main{max-width:760px;margin:0 auto;padding:20px}
+h2{margin:8px 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:12px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+.col{flex-direction:column;align-items:stretch}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.row>input:not([type=radio]):not([type=checkbox]){flex:1;min-width:120px}
+input,textarea,select,button{font:inherit;color:inherit}
+input:not([type=radio]):not([type=checkbox]),textarea,select{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg)}
+textarea{min-height:64px;resize:vertical}
+button{padding:8px 16px;border:0;border-radius:6px;background:var(--acc);color:#fff;cursor:pointer;font-weight:600}
+button.sec{background:transparent;color:var(--ink);border:1px solid var(--line);font-weight:400}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.tabs{display:flex;gap:8px;margin-bottom:16px}
+.tabs button{background:transparent;color:var(--mute);border:1px solid var(--line)}
+.tabs button.on{background:var(--acc);color:#fff;border-color:var(--acc)}
+code{background:var(--bg);padding:2px 8px;border-radius:4px;border:1px solid var(--line)}
+small,.mute{color:var(--mute)}
+.q{display:block;margin:6px 0}
+.ok{color:var(--ok)}.bad{color:var(--bad)}
+table{width:100%;border-collapse:collapse;background:var(--card)}
+td,th{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left}
+.score{font-size:40px;font-weight:700;margin:4px 0 16px}
+.login{max-width:360px;margin:12vh auto}
+</style>
+</head>
+<body>
+<header><b>Тести</b><span id="who"></span></header>
+<main id="app"></main>
+<script>
+// Вставте сюди URL вебдодатка з Apps Script (закінчується на /exec)
+const API = 'ВСТАВТЕ_URL_ВЕБДОДАТКА';
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+let me = null, D = null, T = null, cur = null, tab = 'students';
+
+async function api(action, p = {}) {
+  const r = await fetch(API, { method: 'POST', body: JSON.stringify({ action, code: me && me.code, ...p }) });
+  const j = await r.json();
+  if (j.error) { alert(j.error); throw new Error(j.error); }
+  return j;
+}
+
+function loginView() {
+  $('#who').innerHTML = '';
+  $('#app').innerHTML = `<div class="login"><h2>Вхід</h2>
+    <p class="mute">Введіть персональний код, який дав викладач.</p>
+    <div class="row"><input id="code" placeholder="Код" autocomplete="off"><button onclick="login()">Увійти</button></div></div>`;
+  $('#code').addEventListener('keydown', e => e.key === 'Enter' && login());
+}
+
+async function login(saved) {
+  const code = saved || $('#code').value.trim();
+  if (!code) return;
+  me = { code };
+  try {
+    const j = await api('login');
+    me.role = j.role; me.name = j.name;
+    try { localStorage.setItem('code', code); } catch (e) {}
+    $('#who').innerHTML = `${esc(j.name)} <button class="sec" onclick="logout()">Вийти</button>`;
+    j.role === 'teacher' ? teacher() : home();
+  } catch (e) { me = null; try { localStorage.removeItem('code'); } catch (x) {} loginView(); }
+}
+function logout() { me = null; try { localStorage.removeItem('code'); } catch (e) {} loginView(); }
+
+/* ---------- Учень ---------- */
+async function home() {
+  const j = await api('mine');
+  $('#app').innerHTML = '<h2>Мої тести</h2>' + (j.tests.length ? j.tests.map(t => `
+    <div class="card"><div><b>${esc(t.title)}</b><br><small>${t.last ? 'Останній результат: ' + t.last.score + ' з ' + t.last.max : 'Ще не пройдено'}</small></div>
+    <button onclick="start('${t.id}')">${t.last ? 'Пройти ще раз' : 'Почати'}</button></div>`).join('')
+    : '<p class="mute">Поки що немає призначених тестів.</p>');
+}
+
+async function start(id) {
+  cur = (await api('test', { testId: id })).test;
+  $('#app').innerHTML = `<h2>${esc(cur.title)}</h2>` + cur.questions.map((q, i) => `
+    <div class="card col"><b>${i + 1}. ${esc(q.text)}</b>` + (q.type === 'choice'
+      ? q.options.map((o, j) => `<label class="q"><input type="radio" name="q${i}" value="${j}"> ${esc(o)}</label>`).join('')
+      : `<input id="a${i}" placeholder="Ваша відповідь">`) + '</div>').join('') +
+    '<button onclick="submitTest()">Надіслати відповіді</button>';
+}
+
+async function submitTest() {
+  const answers = cur.questions.map((q, i) => {
+    if (q.type === 'choice') { const c = document.querySelector(`input[name=q${i}]:checked`); return c ? +c.value : -1; }
+    return $('#a' + i).value;
+  });
+  const j = await api('submit', { testId: cur.id, answers });
+  $('#app').innerHTML = `<h2>${esc(cur.title)}</h2><div class="score">${j.score} з ${j.max}</div>` +
+    cur.questions.map((q, i) => `<div class="card col"><b>${i + 1}. ${esc(q.text)}</b>
+      ${j.review[i].ok ? '<span class="ok">Правильно</span>' : `<span class="bad">Неправильно.</span> <span>Правильна відповідь: ${esc(j.review[i].correct)}</span>`}</div>`).join('') +
+    '<button onclick="home()">До моїх тестів</button>';
+}
+
+/* ---------- Викладач ---------- */
+async function teacher() { D = await api('all'); T = null; renderT(); }
+
+function renderT() {
+  if (T) return editor();
+  $('#app').innerHTML = `<div class="tabs">${[['students', 'Учні'], ['tests', 'Тести'], ['results', 'Результати']]
+    .map(([k, n]) => `<button class="${tab === k ? 'on' : ''}" onclick="tab='${k}';renderT()">${n}</button>`).join('')}</div>` +
+    ({ students: tStudents, tests: tTests, results: tResults })[tab]();
+}
+
+function tStudents() {
+  return `<div class="row" style="margin-bottom:12px"><input id="ns" placeholder="Ім'я нового учня"><button onclick="addSt()">Додати учня</button></div>` +
+    (D.students.map(s => `<div class="card col"><div class="row"><b>${esc(s.name)}</b><span class="mute">код:</span><code>${esc(s.code)}</code>
+      <button class="sec" style="margin-left:auto" onclick="delSt('${s.id}')">Видалити</button></div>
+      <div class="row">${D.tests.length ? D.tests.map(t => `<label><input type="checkbox" ${D.assign.some(a => a.studentId == s.id && a.testId == t.id) ? 'checked' : ''}
+        onchange="asg('${s.id}','${t.id}',this.checked)"> ${esc(t.title)}</label>`).join('') : '<small>Спочатку створіть тест на вкладці «Тести»</small>'}</div></div>`).join('') || '<p class="mute">Додайте першого учня.</p>');
+}
+async function addSt() { const n = $('#ns').value.trim(); if (!n) return; await api('addStudent', { name: n }); teacher(); }
+async function delSt(id) { if (confirm('Видалити учня?')) { await api('delStudent', { id }); teacher(); } }
+async function asg(studentId, testId, on) {
+  await api('assign', { studentId, testId, on });
+  D.assign = D.assign.filter(a => !(a.studentId == studentId && a.testId == testId));
+  if (on) D.assign.push({ studentId, testId });
+}
+
+function tTests() {
+  return `<button onclick="newTest()" style="margin-bottom:12px">Створити тест</button>` +
+    (D.tests.map(t => `<div class="card"><div><b>${esc(t.title)}</b><br><small>Питань: ${t.questions.length}</small></div>
+      <div class="row"><button class="sec" onclick="editTest('${t.id}')">Редагувати</button><button class="sec" onclick="delTest('${t.id}')">Видалити</button></div></div>`).join('') || '<p class="mute">Тестів ще немає.</p>');
+}
+function newTest() { T = { title: '', questions: [] }; addQ(); }
+function editTest(id) { T = JSON.parse(JSON.stringify(D.tests.find(t => t.id == id))); renderT(); }
+async function delTest(id) { if (confirm('Видалити тест?')) { await api('delTest', { id }); teacher(); } }
+
+function addQ() { T.questions.push({ type: 'choice', text: '', options: ['', ''], correct: 0, accept: [] }); renderT(); }
+function editor() {
+  $('#app').innerHTML = `<h2>${T.id ? 'Редагування тесту' : 'Новий тест'}</h2>
+    <input placeholder="Назва тесту" value="${esc(T.title)}" oninput="T.title=this.value" style="margin-bottom:12px">` +
+    T.questions.map((q, i) => `<div class="card col">
+      <div class="row"><select style="width:auto" onchange="T.questions[${i}].type=this.value;editor()">
+        <option value="choice" ${q.type == 'choice' ? 'selected' : ''}>Вибір відповіді</option>
+        <option value="text" ${q.type == 'text' ? 'selected' : ''}>Коротка відповідь</option></select>
+        <span class="mute">Питання ${i + 1}</span><button class="sec" style="margin-left:auto" onclick="T.questions.splice(${i},1);editor()">Видалити питання</button></div>
+      <textarea placeholder="Текст питання" oninput="T.questions[${i}].text=this.value">${esc(q.text)}</textarea>` +
+      (q.type == 'choice'
+        ? '<small>Позначте правильний варіант:</small>' + q.options.map((o, j) => `<div class="row"><input type="radio" name="c${i}" ${q.correct == j ? 'checked' : ''} onchange="T.questions[${i}].correct=${j}">
+            <input value="${esc(o)}" placeholder="Варіант ${j + 1}" oninput="T.questions[${i}].options[${j}]=this.value"></div>`).join('') +
+          `<div><button class="sec" onclick="T.questions[${i}].options.push('');editor()">Додати варіант</button></div>`
+        : `<input placeholder="Правильні відповіді через «;»" value="${esc((q.accept || []).join('; '))}"
+            oninput="T.questions[${i}].accept=this.value.split(';').map(s=>s.trim()).filter(Boolean)">`) + '</div>').join('') +
+    `<div class="row"><button class="sec" onclick="addQ()">Додати питання</button><button onclick="saveTest()">Зберегти тест</button><button class="sec" onclick="T=null;renderT()">Скасувати</button></div>`;
+}
+async function saveTest() {
+  if (!T.title.trim()) return alert('Введіть назву тесту');
+  await api('saveTest', { test: T });
+  teacher();
+}
+
+function tResults() {
+  const nm = id => (D.students.find(s => s.id == id) || {}).name || '—';
+  const tt = id => (D.tests.find(t => t.id == id) || {}).title || '—';
+  const rs = D.results.slice().reverse();
+  return rs.length ? `<div style="overflow-x:auto"><table><tr><th>Учень</th><th>Тест</th><th>Бал</th><th>Дата</th></tr>` +
+    rs.map(r => `<tr><td>${esc(nm(r.studentId))}</td><td>${esc(tt(r.testId))}</td><td>${r.score} з ${r.max}</td><td>${new Date(r.date).toLocaleString('uk')}</td></tr>`).join('') + '</table></div>'
+    : '<p class="mute">Результатів ще немає.</p>';
+}
+
+/* ---------- Старт ---------- */
+(function () { let c = null; try { c = localStorage.getItem('code'); } catch (e) {} c ? login(c) : loginView(); })();
+</script>
+</body>
+</html>
