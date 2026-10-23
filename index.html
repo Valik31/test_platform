@@ -41,7 +41,7 @@ td,th{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left}
 <main id="app"></main>
 <script>
 // Вставте сюди URL вебдодатка з Apps Script (закінчується на /exec)
-const API = 'ВСТАВТЕ_URL_ВЕБДОДАТКА';
+const API = 'https://script.googleusercontent.com/macros/echo?user_content_key=AUkAhnSa1YuARTBKPWV9G5ZJnSeJBkGCZb40cREew8IHF0-t32f3x64MVL4dsxKdSp_QlfPc80aL5tOYGXmxnIyqu_xOblNt6zZ-yLuPjLQOTdOpoQ2Jjrlb3hJV-AR7hpD8FaBRAiboqSpcMbIPGrKDrRu77sH3VIp65rKbkKWzk3d8I7oZLTTF111e4lJ3Qd8fD74_TmWYMclJWua8oqkbQQiAMMrfm45ceR_qUaPR2ia-QsXE4qxEM58pIU3wbkqT2xAjtFVwcCWJsE0Audeay2tfzbsCdQ&lib=MMMckwQ7-tqV4mq7ZsBJ6iz81x5CofiQN';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
