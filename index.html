@@ -34,7 +34,13 @@ table{width:100%;border-collapse:collapse;background:var(--card)}
 td,th{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left}
 .score{font-size:40px;font-weight:700;margin:4px 0 16px}
 .login{max-width:360px;margin:12vh auto}
+.pv{margin:2px 0;padding:6px 10px;border-left:3px solid var(--acc);color:var(--mute)}
+.pv:empty{display:none}
+.katex-display{overflow-x:auto;overflow-y:hidden}
 </style>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.css">
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/katex.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.11/contrib/auto-render.min.js"></script>
 </head>
 <body>
 <header><b>Тести</b><span id="who"></span></header>
@@ -46,6 +52,22 @@ const API = 'https://script.google.com/macros/s/AKfycbwRF-TLYa1FImog_nPXWdSb8Onq
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 let me = null, D = null, T = null, cur = null, tab = 'students';
+
+// Формули LaTeX: $...$ у рядку, $$...$$ окремим рядком
+function math(el) {
+  if (window.renderMathInElement) renderMathInElement(el, {
+    delimiters: [{ left: '$$', right: '$$', display: true }, { left: '\\[', right: '\\]', display: true },
+                 { left: '\\(', right: '\\)', display: false }, { left: '$', right: '$', display: false }],
+    throwOnError: false
+  });
+}
+// після кожного оновлення #app автоматично відмальовуємо формули
+(function () {
+  const app = $('#app'), d = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+  Object.defineProperty(app, 'innerHTML', { get() { return d.get.call(this); }, set(v) { d.set.call(this, v); math(this); } });
+  window.addEventListener('load', () => math(app));
+})();
+function pv(i) { const el = $('#pv' + i); el.textContent = T.questions[i].text; math(el); }
 
 async function api(action, p = {}) {
   let j;
@@ -149,13 +171,14 @@ async function delTest(id) { if (confirm('Видалити тест?')) { await 
 function addQ() { T.questions.push({ type: 'choice', text: '', options: ['', ''], correct: 0, accept: [] }); renderT(); }
 function editor() {
   $('#app').innerHTML = `<h2>${T.id ? 'Редагування тесту' : 'Новий тест'}</h2>
-    <input placeholder="Назва тесту" value="${esc(T.title)}" oninput="T.title=this.value" style="margin-bottom:12px">` +
+    <input placeholder="Назва тесту" value="${esc(T.title)}" oninput="T.title=this.value" style="margin-bottom:8px">
+    <p class="mute" style="margin:0 0 12px">Формули: <code>$x^2+1$</code> у тексті, <code>$$\\frac{a}{b}$$</code> окремим рядком. Працює в питаннях і варіантах відповіді.</p>` +
     T.questions.map((q, i) => `<div class="card col">
       <div class="row"><select style="width:auto" onchange="T.questions[${i}].type=this.value;editor()">
         <option value="choice" ${q.type == 'choice' ? 'selected' : ''}>Вибір відповіді</option>
         <option value="text" ${q.type == 'text' ? 'selected' : ''}>Коротка відповідь</option></select>
         <span class="mute">Питання ${i + 1}</span><button class="sec" style="margin-left:auto" onclick="T.questions.splice(${i},1);editor()">Видалити питання</button></div>
-      <textarea placeholder="Текст питання" oninput="T.questions[${i}].text=this.value">${esc(q.text)}</textarea>` +
+      <textarea placeholder="Текст питання" oninput="T.questions[${i}].text=this.value;pv(${i})">${esc(q.text)}</textarea><div class="pv" id="pv${i}">${esc(q.text)}</div>` +
       (q.type == 'choice'
         ? '<small>Позначте правильний варіант:</small>' + q.options.map((o, j) => `<div class="row"><input type="radio" name="c${i}" ${q.correct == j ? 'checked' : ''} onchange="T.questions[${i}].correct=${j}">
             <input value="${esc(o)}" placeholder="Варіант ${j + 1}" oninput="T.questions[${i}].options[${j}]=this.value"></div>`).join('') +
