@@ -119,18 +119,26 @@ function home() {
     : '<p class="mute">Поки що немає призначених тестів.</p>');
 }
 
+function qInput(q, i) {
+  if (q.type === 'choice') return q.options.map((o, j) => `<label class="q"><input type="radio" name="q${i}" value="${j}"> ${esc(o)}</label>`).join('');
+  if (q.type === 'multi') return '<small>Оберіть усі правильні варіанти</small>' + q.options.map((o, j) => `<label class="q"><input type="checkbox" name="q${i}" value="${j}"> ${esc(o)}</label>`).join('');
+  if (q.type === 'number') return `<input id="a${i}" inputmode="decimal" autocomplete="off" placeholder="Число або дріб, напр. 3/4">`;
+  if (q.type === 'match') return q.lefts.map((l, j) => `<div class="row"><span style="flex:1">${esc(l)}</span>
+    <select id="m${i}_${j}" style="flex:1;width:auto"><option value="">—</option>${q.rights.map(r => `<option value="${esc(r)}">${esc(r).replace(/\$/g, '')}</option>`).join('')}</select></div>`).join('');
+  return `<input id="a${i}" autocomplete="off" placeholder="Ваша відповідь">`;
+}
 function start(id) {
   cur = S.find(t => t.id == id);
-  $('#app').innerHTML = `<h2>${esc(cur.title)}</h2>` + cur.questions.map((q, i) => `
-    <div class="card col"><b>${i + 1}. ${esc(q.text)}</b>` + (q.type === 'choice'
-      ? q.options.map((o, j) => `<label class="q"><input type="radio" name="q${i}" value="${j}"> ${esc(o)}</label>`).join('')
-      : `<input id="a${i}" placeholder="Ваша відповідь">`) + '</div>').join('') +
+  $('#app').innerHTML = `<h2>${esc(cur.title)}</h2>` + cur.questions.map((q, i) =>
+    `<div class="card col"><b>${i + 1}. ${esc(q.text)}</b>${qInput(q, i)}</div>`).join('') +
     '<button id="sbtn" onclick="submitTest()">Надіслати відповіді</button>';
 }
 
 async function submitTest() {
   const answers = cur.questions.map((q, i) => {
     if (q.type === 'choice') { const c = document.querySelector(`input[name=q${i}]:checked`); return c ? +c.value : -1; }
+    if (q.type === 'multi') return [...document.querySelectorAll(`input[name=q${i}]:checked`)].map(c => +c.value);
+    if (q.type === 'match') return q.lefts.map((_, j) => $(`#m${i}_${j}`).value);
     return $('#a' + i).value;
   });
   const b = $('#sbtn'); b.disabled = true; b.textContent = 'Перевіряємо…';
@@ -184,23 +192,58 @@ async function delTest(id) { if (!confirm('Видалити тест?')) return;
   renderT(); api('delTest', { id }).catch(teacher);
 }
 
-function addQ() { T.questions.push({ type: 'choice', text: '', options: ['', ''], correct: 0, accept: [] }); renderT(); }
+const TYPES = [['choice', 'Одна правильна відповідь'], ['multi', 'Кілька правильних відповідей'], ['text', 'Коротка відповідь (текст)'],
+  ['number', 'Числова відповідь'], ['match', 'Відповідність']];
+function newQ() { return { type: 'choice', text: '', options: ['', ''], correct: 0, accept: [], value: '', tol: '0', pairs: [{ left: '', right: '' }, { left: '', right: '' }] }; }
+function addQ() { T.questions.push(newQ()); renderT(); }
+function setType(i, t) {
+  const q = Object.assign(newQ(), T.questions[i]);
+  if (t === 'multi' && !Array.isArray(q.correct)) q.correct = [q.correct || 0];
+  if (t === 'choice' && Array.isArray(q.correct)) q.correct = q.correct[0] || 0;
+  q.type = t; T.questions[i] = q; editor();
+}
+function toggleCorrect(i, j, on) {
+  const c = T.questions[i].correct.filter(x => x != j);
+  if (on) c.push(j);
+  T.questions[i].correct = c;
+}
+function delOpt(i, j) {
+  const q = T.questions[i]; q.options.splice(j, 1);
+  if (q.type === 'multi') q.correct = q.correct.filter(c => c != j).map(c => c > j ? c - 1 : c);
+  else q.correct = q.correct == j ? 0 : (q.correct > j ? q.correct - 1 : q.correct);
+  editor();
+}
+function qFields(q, i) {
+  const Q = `T.questions[${i}]`;
+  if (q.type === 'choice' || q.type === 'multi') {
+    const multi = q.type === 'multi';
+    return `<small>${multi ? 'Позначте всі правильні варіанти:' : 'Позначте правильний варіант:'}</small>` + q.options.map((o, j) => `<div class="row">
+      ${multi ? `<input type="checkbox" ${q.correct.includes(j) ? 'checked' : ''} onchange="toggleCorrect(${i},${j},this.checked)">`
+              : `<input type="radio" name="c${i}" ${q.correct == j ? 'checked' : ''} onchange="${Q}.correct=${j}">`}
+      <input value="${esc(o)}" placeholder="Варіант ${j + 1}" oninput="${Q}.options[${j}]=this.value">
+      <button class="sec" onclick="delOpt(${i},${j})" title="Видалити варіант">✕</button></div>`).join('') +
+      `<div><button class="sec" onclick="${Q}.options.push('');editor()">Додати варіант</button></div>`;
+  }
+  if (q.type === 'number') return `<div class="row"><label style="flex:2">Правильна відповідь<input value="${esc(q.value)}" placeholder="напр. 2,5 або 3/4" oninput="${Q}.value=this.value"></label>
+    <label style="flex:1">Допуск (±)<input value="${esc(q.tol)}" placeholder="0" oninput="${Q}.tol=this.value"></label></div>
+    <small>Учень може писати десяткові з комою чи крапкою та дроби (3/4). Допуск потрібен, якщо відповідь можна округлити.</small>`;
+  if (q.type === 'match') return '<small>Пари: ліворуч і праворуч мають збігатися. Учень бачить праві частини в перемішаному порядку.</small>' +
+    q.pairs.map((p, j) => `<div class="row"><input value="${esc(p.left)}" placeholder="Ліва частина" oninput="${Q}.pairs[${j}].left=this.value">
+      <input value="${esc(p.right)}" placeholder="Права частина" oninput="${Q}.pairs[${j}].right=this.value">
+      <button class="sec" onclick="${Q}.pairs.splice(${j},1);editor()" title="Видалити пару">✕</button></div>`).join('') +
+    `<div><button class="sec" onclick="${Q}.pairs.push({left:'',right:''});editor()">Додати пару</button></div>`;
+  return `<input placeholder="Правильні відповіді через «;»" value="${esc((q.accept || []).join('; '))}"
+    oninput="${Q}.accept=this.value.split(';').map(s=>s.trim()).filter(Boolean)">`;
+}
 function editor() {
   $('#app').innerHTML = `<h2>${T.id ? 'Редагування тесту' : 'Новий тест'}</h2>
     <input placeholder="Назва тесту" value="${esc(T.title)}" oninput="T.title=this.value" style="margin-bottom:8px">
     <p class="mute" style="margin:0 0 12px">Формули: <code>$x^2+1$</code> у тексті, <code>$$\\frac{a}{b}$$</code> окремим рядком. Працює в питаннях і варіантах відповіді.</p>` +
     T.questions.map((q, i) => `<div class="card col">
-      <div class="row"><select style="width:auto" onchange="T.questions[${i}].type=this.value;editor()">
-        <option value="choice" ${q.type == 'choice' ? 'selected' : ''}>Вибір відповіді</option>
-        <option value="text" ${q.type == 'text' ? 'selected' : ''}>Коротка відповідь</option></select>
+      <div class="row"><select style="width:auto" onchange="setType(${i},this.value)">${TYPES.map(([k, n]) => `<option value="${k}" ${q.type == k ? 'selected' : ''}>${n}</option>`).join('')}</select>
         <span class="mute">Питання ${i + 1}</span><button class="sec" style="margin-left:auto" onclick="T.questions.splice(${i},1);editor()">Видалити питання</button></div>
-      <textarea placeholder="Текст питання" oninput="T.questions[${i}].text=this.value;pv(${i})">${esc(q.text)}</textarea><div class="pv" id="pv${i}">${esc(q.text)}</div>` +
-      (q.type == 'choice'
-        ? '<small>Позначте правильний варіант:</small>' + q.options.map((o, j) => `<div class="row"><input type="radio" name="c${i}" ${q.correct == j ? 'checked' : ''} onchange="T.questions[${i}].correct=${j}">
-            <input value="${esc(o)}" placeholder="Варіант ${j + 1}" oninput="T.questions[${i}].options[${j}]=this.value"></div>`).join('') +
-          `<div><button class="sec" onclick="T.questions[${i}].options.push('');editor()">Додати варіант</button></div>`
-        : `<input placeholder="Правильні відповіді через «;»" value="${esc((q.accept || []).join('; '))}"
-            oninput="T.questions[${i}].accept=this.value.split(';').map(s=>s.trim()).filter(Boolean)">`) + '</div>').join('') +
+      <textarea placeholder="Текст питання" oninput="T.questions[${i}].text=this.value;pv(${i})">${esc(q.text)}</textarea><div class="pv" id="pv${i}">${esc(q.text)}</div>
+      ${qFields(q, i)}</div>`).join('') +
     `<div class="row"><button class="sec" onclick="addQ()">Додати питання</button><button onclick="saveTest()">Зберегти тест</button><button class="sec" onclick="T=null;renderT()">Скасувати</button></div>`;
 }
 async function saveTest() {
